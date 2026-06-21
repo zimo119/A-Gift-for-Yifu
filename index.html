@@ -258,6 +258,7 @@
     <div style="font-size: 24px; letter-spacing: 4px;">THE JOURNEY</div>
     <div style="font-size: 12px; color: #888; margin-top: 8px; letter-spacing: 2px;">Loading...</div>
     <div class="loading-bar"><div class="loading-fill" id="loading-fill"></div></div>
+    <div id="loading-hint" style="font-size: 10px; color: #555; margin-top: 12px; max-width: 300px; text-align: center; line-height: 1.4;">If this takes too long, tap the screen to start</div>
   </div>
 </div>
 
@@ -719,14 +720,31 @@ async function loadAudioBuffers() {
   const promises = [];
   for (const [name, dataUri] of Object.entries(AUDIO_DATA)) {
     promises.push(
-      fetch(dataUri)
-        .then(r => r.arrayBuffer())
-        .then(buf => audioCtx.decodeAudioData(buf))
-        .then(decoded => {
-          game.audioBuffers[name] = decoded;
-          console.log(`Audio loaded: ${name} (${decoded.duration.toFixed(2)}s)`);
-        })
-        .catch(err => console.warn(`Failed to load audio ${name}:`, err))
+      new Promise((resolve) => {
+        fetch(dataUri)
+          .then(r => r.arrayBuffer())
+          .then(buf => {
+            // Use callback-based decodeAudioData for broader compatibility
+            if (audioCtx.decodeAudioData.length === 1) {
+              // Promise-based (modern browsers)
+              return audioCtx.decodeAudioData(buf);
+            } else {
+              // Callback-based (older Safari/iOS)
+              return new Promise((res, rej) => {
+                audioCtx.decodeAudioData(buf, res, rej);
+              });
+            }
+          })
+          .then(decoded => {
+            game.audioBuffers[name] = decoded;
+            console.log(`Audio loaded: ${name} (${decoded.duration.toFixed(2)}s)`);
+            resolve();
+          })
+          .catch(err => {
+            console.warn(`Failed to load audio ${name}:`, err);
+            resolve();  // resolve anyway so we don't block
+          });
+      })
     );
   }
   await Promise.all(promises);
@@ -2152,45 +2170,91 @@ window.addEventListener('resize', positionThinkPadIcon);
 // ===== INIT =====
 function init() {
   loadGame();
+
+  let gameLoopStarted = false;
+
+  // Timeout to ensure game starts even if something hangs
+  const startupTimeout = setTimeout(() => {
+    console.warn('Startup timeout - forcing game start');
+    document.getElementById('loading').classList.add('hidden');
+    if (!game.scene) {
+      changeScene('MainMenu');
+      if (!gameLoopStarted) {
+        gameLoopStarted = true;
+        requestAnimationFrame(gameLoop);
+      }
+    }
+  }, 8000);  // 8 second max wait
+
+  function startGame() {
+    if (gameLoopStarted) return;
+    gameLoopStarted = true;
+    clearTimeout(startupTimeout);
+    document.getElementById('loading-fill').style.width = '100%';
+    setTimeout(() => {
+      document.getElementById('loading').classList.add('hidden');
+      changeScene('MainMenu');
+      requestAnimationFrame(gameLoop);
+    }, 300);
+  }
+
   // Load family photo
   const img = new Image();
   img.onload = () => {
     game.familyPhotoImg = img;
-    document.getElementById('loading-fill').style.width = '70%';
-    // Initialize audio and load buffers
-    initAudio();
+    document.getElementById('loading-fill').style.width = '50%';
+    // Try to initialize audio (non-blocking - game starts even if audio fails)
+    try {
+      initAudio();
+    } catch (e) { console.warn('Audio init failed:', e); }
+
     if (audioCtx) {
-      loadAudioBuffers().then(() => {
-        document.getElementById('loading-fill').style.width = '100%';
-        setTimeout(() => {
-          document.getElementById('loading').classList.add('hidden');
-          changeScene('MainMenu');
-          requestAnimationFrame(gameLoop);
-        }, 300);
-      });
+      // Load audio buffers with timeout - don't block game start
+      loadAudioBuffers()
+        .then(() => { console.log('Audio loaded'); })
+        .catch(err => { console.warn('Audio load failed:', err); })
+        .finally(() => { startGame(); });
+
+      // Safety: start game after 3 seconds even if audio is still loading
+      setTimeout(() => startGame(), 3000);
     } else {
-      document.getElementById('loading-fill').style.width = '100%';
-      setTimeout(() => {
-        document.getElementById('loading').classList.add('hidden');
-        changeScene('MainMenu');
-        requestAnimationFrame(gameLoop);
-      }, 300);
+      startGame();
     }
   };
   img.onerror = () => {
-    document.getElementById('loading').innerHTML = '<div style="color:#c84444">Failed to load family photo. Please check the file.</div>';
+    // If photo fails, still start the game
+    console.warn('Family photo failed to load');
+    startGame();
   };
+
+  // Set a timeout for image loading too
+  setTimeout(() => {
+    if (!gameLoopStarted) {
+      console.warn('Image load timeout - starting anyway');
+      startGame();
+    }
+  }, 5000);
+
   img.src = FAMILY_PHOTO_DATA_URI;
 
-  // Click anywhere to init audio (browser policy)
-  document.addEventListener('click', () => {
-    initAudio();
-    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
-  }, { once: true });
-  document.addEventListener('keydown', () => {
-    initAudio();
-    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
-  }, { once: true });
+  // Click/touch anywhere to init audio (browser policy - especially mobile)
+  const initAudioOnInteraction = () => {
+    try {
+      initAudio();
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    } catch (e) { console.warn('Audio resume failed:', e); }
+  };
+  document.addEventListener('click', initAudioOnInteraction, { once: false });
+  document.addEventListener('keydown', initAudioOnInteraction, { once: false });
+  document.addEventListener('touchstart', initAudioOnInteraction, { passive: true });
+
+  // Allow tapping loading screen to force-start
+  document.getElementById('loading').addEventListener('click', () => {
+    if (!gameLoopStarted) startGame();
+  });
+  document.getElementById('loading').addEventListener('touchstart', () => {
+    if (!gameLoopStarted) startGame();
+  }, { passive: true });
 
   // ESC closes thinkpad
   window.addEventListener('keydown', (e) => {
@@ -2455,10 +2519,20 @@ class MainMenu extends Scene {
     });
 
     // Footer
-    drawText('Arrow Keys: Navigate    Enter: Start    Click ThinkPad (top-right) for memories',
-      CW / 2, CH - 30, {
-        color: '#7a6048', font: '13px "Courier New", monospace', align: 'center',
-      });
+    const footerText = isMobile
+      ? 'Joystick: Move    OK Button: Interact    Tap ThinkPad (top-right) for memories'
+      : 'Arrow Keys: Navigate    Enter: Start    Click ThinkPad (top-right) for memories';
+    drawText(footerText, CW / 2, CH - 30, {
+      color: '#7a6048', font: '12px "Courier New", monospace', align: 'center',
+    });
+
+    // Device type indicator (bottom-right corner)
+    const deviceText = isMobile ? '📱 MOBILE' : '💻 DESKTOP';
+    const deviceColor = isMobile ? '#6a9a6a' : '#6a8a9a';
+    drawText(deviceText, CW - 80, CH - 55, {
+      color: deviceColor, font: 'bold 11px "Courier New", monospace', align: 'center',
+      shadow: true,
+    });
   }
   cleanup() {
     stopBgm();
