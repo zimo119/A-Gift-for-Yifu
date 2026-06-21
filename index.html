@@ -367,8 +367,20 @@ function srand() {
 function sresetSeed(s) { seedRng = s; }
 
 // ===== MOBILE DETECTION =====
-const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
-  ('ontouchstart' in window && window.innerWidth < 1024);
+// Detect touch devices - use multiple methods for reliability
+let isMobile = false;
+function detectMobile() {
+  const ua = navigator.userAgent || navigator.vendor || window.opera;
+  const uaMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
+  const hasTouch = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+  // Mobile if: UA says mobile (most reliable), OR has touch hardware + small screen
+  // Don't rely on screen size alone - desktop windows can be small
+  isMobile = uaMobile || (hasTouch && Math.min(window.innerWidth, window.innerHeight) < 1024);
+  return isMobile;
+}
+detectMobile();
+// Re-check on resize (orientation change)
+window.addEventListener('resize', detectMobile);
 
 // ===== TOUCH BUTTON SYSTEM (mobile only) =====
 // Virtual buttons rendered on canvas for mobile devices
@@ -409,9 +421,16 @@ function updateTouchButtonPositions() {
   touchControls.brakeBtn.y = CH - 60;
 }
 
+// Check if this device uses touch (for showing touch controls)
+function hasTouchInput() {
+  return 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+}
+
 // Set which touch controls are active for current scene
+// Activates on mobile devices (detected via UA or touch capability)
 function setTouchControls(config) {
-  if (!isMobile) return;
+  // Show touch controls if: isMobile flag is true, OR device has touch input
+  if (!isMobile && !hasTouchInput()) return;
   touchControls.enabled = true;
   touchControls.actionBtn.visible = config.action || false;
   touchControls.gasBtn.visible = config.gas || false;
@@ -429,7 +448,7 @@ function disableTouchControls() {
 
 // Draw touch controls on canvas (called every frame for mobile)
 function drawTouchControls() {
-  if (!isMobile || !touchControls.enabled) return;
+  if (!touchControls.enabled) return;
 
   // Draw joystick if active
   if (touchControls.joystick.active) {
@@ -543,7 +562,9 @@ function touchOnJoystick(touchX, touchY) {
 
 // Touch event handlers
 function handleTouchStart(e) {
-  if (!isMobile || !touchControls.enabled) return;
+  // Always handle touch if touch controls are enabled
+  // (don't check isMobile here - it may not be reliable)
+  if (!touchControls.enabled) return;
   e.preventDefault();
   const canvasRect = canvas.getBoundingClientRect();
   const scaleX = CW / canvasRect.width;
@@ -594,7 +615,7 @@ function handleTouchStart(e) {
 }
 
 function handleTouchMove(e) {
-  if (!isMobile || !touchControls.enabled) return;
+  if (!touchControls.enabled) return;
   e.preventDefault();
   const canvasRect = canvas.getBoundingClientRect();
   const scaleX = CW / canvasRect.width;
@@ -619,7 +640,7 @@ function handleTouchMove(e) {
 }
 
 function handleTouchEnd(e) {
-  if (!isMobile || !touchControls.enabled) return;
+  if (!touchControls.enabled) return;
   e.preventDefault();
 
   for (const touch of e.changedTouches) {
@@ -702,13 +723,12 @@ function simulateSpaceRelease() {
   }
 }
 
-// Register touch event listeners (only on mobile)
-if (isMobile) {
-  canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
-  canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
-  canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
-  canvas.addEventListener('touchcancel', handleTouchEnd, { passive: false });
-}
+// Register touch event listeners ALWAYS - check isMobile inside handlers
+// This ensures touch works even if isMobile changes after page load
+canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
+canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
+canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
+canvas.addEventListener('touchcancel', handleTouchEnd, { passive: false });
 
 // ===== GAME STATE =====
 const game = {
@@ -2167,11 +2187,9 @@ function gameLoop(timestamp) {
     tpIcon.style.display = 'block';
   }
 
-  // Update and draw touch controls (mobile only)
-  if (isMobile) {
-    updateTouchButtonPositions();
-    drawTouchControls();
-  }
+  // Update and draw touch controls (if enabled)
+  updateTouchButtonPositions();
+  drawTouchControls();
 
   requestAnimationFrame(gameLoop);
 }
@@ -2263,7 +2281,6 @@ function init() {
   let audioInitialized = false;
   const initAudioOnInteraction = () => {
     if (audioInitialized) {
-      // Just resume if suspended
       if (audioCtx && audioCtx.state === 'suspended') {
         audioCtx.resume();
       }
@@ -2275,7 +2292,6 @@ function init() {
       if (audioCtx && audioCtx.state === 'suspended') {
         audioCtx.resume();
       }
-      // Now that we have audio context (after user interaction), load audio buffers
       if (audioCtx && !game.audioReady) {
         loadAudioBuffers()
           .then(() => { console.log('Audio loaded after interaction'); })
@@ -2283,9 +2299,10 @@ function init() {
       }
     } catch (e) { console.warn('Audio init failed:', e); }
   };
-  document.addEventListener('click', initAudioOnInteraction);
+  // Use pointerdown for broader compatibility (covers mouse + touch + pen)
+  // Don't use touchstart on document - it conflicts with canvas touch handlers
+  document.addEventListener('pointerdown', initAudioOnInteraction);
   document.addEventListener('keydown', initAudioOnInteraction);
-  document.addEventListener('touchstart', initAudioOnInteraction, { passive: true });
 
   // Allow tapping loading screen to force-start
   document.getElementById('loading').addEventListener('click', () => {
@@ -3101,11 +3118,11 @@ class Chapter1 extends Scene {
         'backpack': 'Press SPACE to put item in backpack',
       }[nearbyType];
       showPrompt(promptText);
-      // Mobile: show action button
-      touchControls.actionBtn.visible = isMobile;
+      // Show action button (visible on touch devices)
+      touchControls.actionBtn.visible = true;
     } else {
       hidePrompt();
-      // Mobile: hide action button
+      // Hide action button
       touchControls.actionBtn.visible = false;
     }
   }
