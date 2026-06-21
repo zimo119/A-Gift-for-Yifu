@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>The Journey - For Yifu Wang</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -11,6 +12,10 @@
     font-family: 'Courier New', monospace;
     overflow: hidden;
     color: #fff;
+    touch-action: none;  /* prevent default touch behaviors on mobile */
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
   }
   #game-container {
     position: relative;
@@ -331,6 +336,350 @@ function srand() {
   return seedRng / 233280;
 }
 function sresetSeed(s) { seedRng = s; }
+
+// ===== MOBILE DETECTION =====
+const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+  ('ontouchstart' in window && window.innerWidth < 1024);
+
+// ===== TOUCH BUTTON SYSTEM (mobile only) =====
+// Virtual buttons rendered on canvas for mobile devices
+const touchControls = {
+  // Joystick (left side)
+  joystick: { active: false, x: 0, y: 0, baseX: 0, baseY: 0, dx: 0, dy: 0, touchId: null },
+  // Action button (right side)
+  actionBtn: { x: 0, y: 0, r: 40, pressed: false, visible: false, touchId: null },
+  // Gas button (right side, for driving)
+  gasBtn: { x: 0, y: 0, r: 45, pressed: false, visible: false, touchId: null },
+  // Brake button (left side, for driving)
+  brakeBtn: { x: 0, y: 0, r: 45, pressed: false, visible: false, touchId: null },
+  // Whether touch controls are active for current scene
+  enabled: false,
+};
+
+// Update touch button positions based on canvas size
+function updateTouchButtonPositions() {
+  if (!isMobile) return;
+  const canvasRect = canvas.getBoundingClientRect();
+  const scaleX = CW / canvasRect.width;
+  const scaleY = CH / canvasRect.height;
+
+  // Joystick base position (bottom-left)
+  touchControls.joystick.baseX = 80;
+  touchControls.joystick.baseY = CH - 80;
+
+  // Action button (bottom-right)
+  touchControls.actionBtn.x = CW - 70;
+  touchControls.actionBtn.y = CH - 70;
+
+  // Gas button (bottom-right, for driving)
+  touchControls.gasBtn.x = CW - 60;
+  touchControls.gasBtn.y = CH - 60;
+
+  // Brake button (bottom-left, for driving)
+  touchControls.brakeBtn.x = 60;
+  touchControls.brakeBtn.y = CH - 60;
+}
+
+// Set which touch controls are active for current scene
+function setTouchControls(config) {
+  if (!isMobile) return;
+  touchControls.enabled = true;
+  touchControls.actionBtn.visible = config.action || false;
+  touchControls.gasBtn.visible = config.gas || false;
+  touchControls.brakeBtn.visible = config.brake || false;
+  touchControls.joystick.active = config.joystick || false;
+}
+
+function disableTouchControls() {
+  touchControls.enabled = false;
+  touchControls.actionBtn.visible = false;
+  touchControls.gasBtn.visible = false;
+  touchControls.brakeBtn.visible = false;
+  touchControls.joystick.active = false;
+}
+
+// Draw touch controls on canvas (called every frame for mobile)
+function drawTouchControls() {
+  if (!isMobile || !touchControls.enabled) return;
+
+  // Draw joystick if active
+  if (touchControls.joystick.active) {
+    const j = touchControls.joystick;
+    // Base circle
+    ctx.strokeStyle = 'rgba(201, 168, 106, 0.4)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(j.baseX, j.baseY, 50, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.beginPath();
+    ctx.arc(j.baseX, j.baseY, 50, 0, Math.PI * 2);
+    ctx.fill();
+    // Stick (moves when touched)
+    const stickX = j.baseX + j.dx * 30;
+    const stickY = j.baseY + j.dy * 30;
+    ctx.fillStyle = j.active ? 'rgba(240, 208, 144, 0.8)' : 'rgba(201, 168, 106, 0.5)';
+    ctx.beginPath();
+    ctx.arc(stickX, stickY, 25, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(240, 208, 144, 0.6)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  // Draw action button if visible
+  if (touchControls.actionBtn.visible) {
+    const b = touchControls.actionBtn;
+    const scale = b.pressed ? 0.85 : 1.0;
+    const r = b.r * scale;
+    // Glow when pressed
+    if (b.pressed) {
+      ctx.shadowColor = 'rgba(240, 208, 144, 0.8)';
+      ctx.shadowBlur = 25;
+    }
+    ctx.fillStyle = b.pressed ? 'rgba(240, 208, 144, 0.6)' : 'rgba(201, 168, 106, 0.3)';
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = b.pressed ? '#f0d090' : 'rgba(201, 168, 106, 0.6)';
+    ctx.lineWidth = b.pressed ? 3 : 2;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    // Label
+    drawText('OK', b.x, b.y, {
+      color: b.pressed ? '#fff5d0' : '#f0d090',
+      font: 'bold 18px "Courier New", monospace',
+      align: 'center', baseline: 'middle',
+    });
+  }
+
+  // Draw gas button if visible (right side, driving)
+  if (touchControls.gasBtn.visible) {
+    const b = touchControls.gasBtn;
+    const scale = b.pressed ? 0.85 : 1.0;
+    const r = b.r * scale;
+    if (b.pressed) {
+      ctx.shadowColor = 'rgba(240, 208, 144, 0.8)';
+      ctx.shadowBlur = 25;
+    }
+    ctx.fillStyle = b.pressed ? 'rgba(120, 200, 120, 0.6)' : 'rgba(80, 160, 80, 0.3)';
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = b.pressed ? '#a0e0a0' : 'rgba(120, 200, 120, 0.6)';
+    ctx.lineWidth = b.pressed ? 3 : 2;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    drawText('▶', b.x, b.y, {
+      color: b.pressed ? '#fff5d0' : '#a0e0a0',
+      font: 'bold 28px "Courier New", monospace',
+      align: 'center', baseline: 'middle',
+    });
+  }
+
+  // Draw brake button if visible (left side, driving)
+  if (touchControls.brakeBtn.visible) {
+    const b = touchControls.brakeBtn;
+    const scale = b.pressed ? 0.85 : 1.0;
+    const r = b.r * scale;
+    if (b.pressed) {
+      ctx.shadowColor = 'rgba(240, 144, 144, 0.8)';
+      ctx.shadowBlur = 25;
+    }
+    ctx.fillStyle = b.pressed ? 'rgba(220, 120, 120, 0.6)' : 'rgba(180, 80, 80, 0.3)';
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = b.pressed ? '#f0a0a0' : 'rgba(220, 120, 120, 0.6)';
+    ctx.lineWidth = b.pressed ? 3 : 2;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    drawText('■', b.x, b.y, {
+      color: b.pressed ? '#fff5d0' : '#f0a0a0',
+      font: 'bold 22px "Courier New", monospace',
+      align: 'center', baseline: 'middle',
+    });
+  }
+}
+
+// Check if a touch point is on a specific button
+function touchOnButton(touchX, touchY, btn) {
+  return Math.hypot(touchX - btn.x, touchY - btn.y) < btn.r;
+}
+
+// Check if a touch point is on the joystick
+function touchOnJoystick(touchX, touchY) {
+  return Math.hypot(touchX - touchControls.joystick.baseX, touchY - touchControls.joystick.baseY) < 60;
+}
+
+// Touch event handlers
+function handleTouchStart(e) {
+  if (!isMobile || !touchControls.enabled) return;
+  e.preventDefault();
+  const canvasRect = canvas.getBoundingClientRect();
+  const scaleX = CW / canvasRect.width;
+  const scaleY = CH / canvasRect.height;
+
+  for (const touch of e.changedTouches) {
+    const tx = (touch.clientX - canvasRect.left) * scaleX;
+    const ty = (touch.clientY - canvasRect.top) * scaleY;
+
+    // Check joystick
+    if (touchControls.joystick.active && touchOnJoystick(tx, ty)) {
+      touchControls.joystick.active = true;
+      touchControls.joystick.touchId = touch.identifier;
+      touchControls.joystick.x = tx;
+      touchControls.joystick.y = ty;
+      updateJoystickVector();
+      continue;
+    }
+    // Check action button
+    if (touchControls.actionBtn.visible && touchOnButton(tx, ty, touchControls.actionBtn)) {
+      touchControls.actionBtn.pressed = true;
+      touchControls.actionBtn.touchId = touch.identifier;
+      simulateSpacePress();
+      continue;
+    }
+    // Check gas button
+    if (touchControls.gasBtn.visible && touchOnButton(tx, ty, touchControls.gasBtn)) {
+      touchControls.gasBtn.pressed = true;
+      touchControls.gasBtn.touchId = touch.identifier;
+      keys['arrowright'] = true;
+      keys['d'] = true;
+      continue;
+    }
+    // Check brake button
+    if (touchControls.brakeBtn.visible && touchOnButton(tx, ty, touchControls.brakeBtn)) {
+      touchControls.brakeBtn.pressed = true;
+      touchControls.brakeBtn.touchId = touch.identifier;
+      // Brake = release gas (decelerate)
+      keys['arrowright'] = false;
+      keys['d'] = false;
+      continue;
+    }
+    // Otherwise, treat as canvas tap (for scene-specific touch)
+    if (game.scene && game.scene.onTouchStart) {
+      game.scene.onTouchStart(tx, ty, touch.identifier);
+    }
+  }
+}
+
+function handleTouchMove(e) {
+  if (!isMobile || !touchControls.enabled) return;
+  e.preventDefault();
+  const canvasRect = canvas.getBoundingClientRect();
+  const scaleX = CW / canvasRect.width;
+  const scaleY = CH / canvasRect.height;
+
+  for (const touch of e.changedTouches) {
+    const tx = (touch.clientX - canvasRect.left) * scaleX;
+    const ty = (touch.clientY - canvasRect.top) * scaleY;
+
+    // Update joystick
+    if (touch.identifier === touchControls.joystick.touchId) {
+      touchControls.joystick.x = tx;
+      touchControls.joystick.y = ty;
+      updateJoystickVector();
+      continue;
+    }
+    // Otherwise, treat as canvas drag (for scene-specific touch, e.g. fog drawing)
+    if (game.scene && game.scene.onTouchMove) {
+      game.scene.onTouchMove(tx, ty, touch.identifier);
+    }
+  }
+}
+
+function handleTouchEnd(e) {
+  if (!isMobile || !touchControls.enabled) return;
+  e.preventDefault();
+
+  for (const touch of e.changedTouches) {
+    // Release joystick
+    if (touch.identifier === touchControls.joystick.touchId) {
+      touchControls.joystick.touchId = null;
+      touchControls.joystick.dx = 0;
+      touchControls.joystick.dy = 0;
+      // Reset all movement keys
+      keys['arrowup'] = false; keys['w'] = false;
+      keys['arrowdown'] = false; keys['s'] = false;
+      keys['arrowleft'] = false; keys['a'] = false;
+      keys['arrowright'] = false; keys['d'] = false;
+      continue;
+    }
+    // Release action button
+    if (touch.identifier === touchControls.actionBtn.touchId) {
+      touchControls.actionBtn.pressed = false;
+      touchControls.actionBtn.touchId = null;
+      simulateSpaceRelease();
+      continue;
+    }
+    // Release gas button
+    if (touch.identifier === touchControls.gasBtn.touchId) {
+      touchControls.gasBtn.pressed = false;
+      touchControls.gasBtn.touchId = null;
+      keys['arrowright'] = false;
+      keys['d'] = false;
+      continue;
+    }
+    // Release brake button
+    if (touch.identifier === touchControls.brakeBtn.touchId) {
+      touchControls.brakeBtn.pressed = false;
+      touchControls.brakeBtn.touchId = null;
+      continue;
+    }
+    // Otherwise, treat as canvas touch end
+    if (game.scene && game.scene.onTouchEnd) {
+      game.scene.onTouchEnd(touch.identifier);
+    }
+  }
+}
+
+// Update joystick direction vector and set movement keys
+function updateJoystickVector() {
+  const j = touchControls.joystick;
+  const dx = j.x - j.baseX;
+  const dy = j.y - j.baseY;
+  const dist = Math.hypot(dx, dy);
+  const maxDist = 50;
+  if (dist > 0) {
+    j.dx = Math.max(-1, Math.min(1, dx / maxDist));
+    j.dy = Math.max(-1, Math.min(1, dy / maxDist));
+  } else {
+    j.dx = 0;
+    j.dy = 0;
+  }
+
+  // Set movement keys based on joystick direction (threshold at 0.3)
+  const threshold = 0.3;
+  keys['arrowup'] = j.dy < -threshold; keys['w'] = j.dy < -threshold;
+  keys['arrowdown'] = j.dy > threshold; keys['s'] = j.dy > threshold;
+  keys['arrowleft'] = j.dx < -threshold; keys['a'] = j.dx < -threshold;
+  keys['arrowright'] = j.dx > threshold; keys['d'] = j.dx > threshold;
+}
+
+// Simulate space key press/release for action button
+function simulateSpacePress() {
+  keys[' '] = true;
+  if (game.scene && game.scene.onKey) {
+    const fakeEvent = { key: ' ' };
+    game.scene.onKey(fakeEvent);
+  }
+}
+function simulateSpaceRelease() {
+  keys[' '] = false;
+  if (game.scene && game.scene.onKeyUp) {
+    const fakeEvent = { key: ' ' };
+    game.scene.onKeyUp(fakeEvent);
+  }
+}
+
+// Register touch event listeners (only on mobile)
+if (isMobile) {
+  canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
+  canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
+  canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
+  canvas.addEventListener('touchcancel', handleTouchEnd, { passive: false });
+}
 
 // ===== GAME STATE =====
 const game = {
@@ -1185,6 +1534,9 @@ class Scene {
   onMouseDown(x, y) {}
   onMouseMove(x, y) {}
   onMouseUp(x, y) {}
+  onTouchStart(x, y, id) {}
+  onTouchMove(x, y, id) {}
+  onTouchEnd(id) {}
   onResize() {}
   cleanup() {}
 }
@@ -1769,6 +2121,12 @@ function gameLoop(timestamp) {
     tpIcon.style.display = 'block';
   }
 
+  // Update and draw touch controls (mobile only)
+  if (isMobile) {
+    updateTouchButtonPositions();
+    drawTouchControls();
+  }
+
   requestAnimationFrame(gameLoop);
 }
 
@@ -1777,8 +2135,9 @@ function positionThinkPadIcon() {
   const canvasRect = canvas.getBoundingClientRect();
   const containerRect = document.getElementById('game-container').getBoundingClientRect();
   // The icon should be at the top-right of the canvas, with some padding
-  const padding = 16;
-  const iconSize = 48;
+  // On mobile, push it further to the edge to not cover game content
+  const padding = isMobile ? 8 : 16;
+  const iconSize = isMobile ? 40 : 48;
   const rightOffset = containerRect.right - canvasRect.right + padding;
   const topOffset = canvasRect.top - containerRect.top + padding;
   tpIcon.style.top = topOffset + 'px';
@@ -2419,7 +2778,9 @@ class ClearAnimation extends Scene {
       changeScene('MainMenu');
     }
   }
-  cleanup() { stopBgm(); }
+  cleanup() { stopBgm(); disableTouchControls(); }
+  // Touch handler (mobile) - forward to mouse
+  onTouchStart(x, y, id) { this.onMouseDown(x, y); }
 }
 SCENES.ClearAnimation = ClearAnimation;
 
@@ -2483,6 +2844,8 @@ class Chapter1 extends Scene {
     this.npcMoveTimer = 0;
     this.footstepActive = false;
     startBgm('chapter1');
+    // Mobile: enable joystick always, action button when near interactable
+    setTouchControls({ joystick: true });
   }
   update(dt) {
     // Player movement
@@ -2609,8 +2972,12 @@ class Chapter1 extends Scene {
         'backpack': 'Press SPACE to put item in backpack',
       }[nearbyType];
       showPrompt(promptText);
+      // Mobile: show action button
+      touchControls.actionBtn.visible = isMobile;
     } else {
       hidePrompt();
+      // Mobile: hide action button
+      touchControls.actionBtn.visible = false;
     }
   }
   onKey(e) {
@@ -2909,7 +3276,7 @@ class Chapter1 extends Scene {
       }
     });
   }
-  cleanup() { stopBgm(); hidePrompt(); if (this.footstepHandle) stopAudioSource(this.footstepHandle); }
+  cleanup() { stopBgm(); hidePrompt(); disableTouchControls(); if (this.footstepHandle) stopAudioSource(this.footstepHandle); }
 }
 SCENES.Chapter1 = Chapter1;
 
@@ -2954,6 +3321,8 @@ class Chapter2 extends Scene {
     startBgm('chapter2');
     // Show first memory line immediately
     showSubtitle(this.memoryLines[0], 6000);
+    // Mobile: no buttons, but touch is enabled for fog mechanic
+    setTouchControls({});
   }
   makeClouds(count, scale, baseSize) {
     const clouds = [];
@@ -3041,6 +3410,47 @@ class Chapter2 extends Scene {
   }
   onMouseUp(x, y) {
     this.isDrawingOnFog = false;
+  }
+  // Touch handlers (mobile) - same as mouse but for touch
+  onTouchStart(x, y, id) {
+    this.mouseX = x;
+    this.mouseY = y;
+    // If inside window, start charging fog (long press)
+    if (this.isInsideWindow(x, y) && !this.isChargingFog && !this.canFinish) {
+      this.isChargingFog = true;
+      this.chargeX = x;
+      this.chargeY = y;
+      this.fogCharge = 0;
+      this.fogChargeTouchId = id;
+      hidePrompt();
+    } else if (this.fogCircles.length > 0) {
+      // Start drawing on existing fog
+      this.isDrawingOnFog = true;
+      this.fogDrawTouchId = id;
+      this.drawOnFog(x, y);
+    }
+  }
+  onTouchMove(x, y, id) {
+    this.mouseX = x;
+    this.mouseY = y;
+    // If this is the drawing touch, continue drawing
+    if (this.isDrawingOnFog && id === this.fogDrawTouchId) {
+      this.drawOnFog(x, y);
+    }
+  }
+  onTouchEnd(id) {
+    // If charging fog touch ended, release fog
+    if (id === this.fogChargeTouchId) {
+      this.fogChargeTouchId = null;
+      if (this.isChargingFog) {
+        this.onKeyUp({ key: ' ' });  // reuse the key release logic
+      }
+    }
+    // If drawing touch ended
+    if (id === this.fogDrawTouchId) {
+      this.fogDrawTouchId = null;
+      this.isDrawingOnFog = false;
+    }
   }
   onKey(e) {
     if (e.key === ' ') {
@@ -3453,7 +3863,7 @@ class Chapter2 extends Scene {
     }
     ctx.fill();
   }
-  cleanup() { stopBgm(); hidePrompt(); hideSubtitle(); }
+  cleanup() { stopBgm(); hidePrompt(); hideSubtitle(); disableTouchControls(); }
 }
 SCENES.Chapter2 = Chapter2;
 
@@ -3523,6 +3933,8 @@ class Chapter3 extends Scene {
     this.obstacleSpawnTracker = { 0: false, 1: false };  // track which obstacles have spawned
 
     startBgm('chapter3');
+    // Mobile: enable joystick for walking phase
+    setTouchControls({ joystick: true });
   }
   makeBuildings() {
     const buildings = [];
@@ -3657,6 +4069,8 @@ class Chapter3 extends Scene {
           this.phase = 'driving';
           this.driveDistance = 0;
           showSubtitle('Press → to drive home', 4000);
+          // Mobile: switch from joystick to gas/brake buttons
+          setTouchControls({ gas: true, brake: true });
         }
       }
       const carDoorX = this.carX - 20;
@@ -4321,6 +4735,7 @@ class Chapter3 extends Scene {
     hidePrompt();
     this.stopSnowFootsteps();
     if (this.carDrivingHandle) stopAudioSource(this.carDrivingHandle);
+    disableTouchControls();
   }
 }
 SCENES.Chapter3 = Chapter3;
@@ -4358,6 +4773,8 @@ class Chapter4 extends Scene {
     this.nodeHover = null;
     this.startTime = performance.now();
     startBgm('chapter4');
+    // Mobile: no buttons, touch dragging is handled by touch handlers
+    setTouchControls({});
   }
   update(dt) {
     // Check hover state
@@ -4444,6 +4861,10 @@ class Chapter4 extends Scene {
     }
     this.draggingFrom = null;
   }
+  // Touch handlers (mobile) - forward to mouse handlers
+  onTouchStart(x, y, id) { this.mouseX = x; this.mouseY = y; this.onMouseDown(x, y); this.touchDragId = id; }
+  onTouchMove(x, y, id) { if (id === this.touchDragId) { this.mouseX = x; this.mouseY = y; this.onMouseMove(x, y); } }
+  onTouchEnd(id) { if (id === this.touchDragId) { this.onMouseUp(this.mouseX, this.mouseY); this.touchDragId = null; } }
   render() {
     // Pixel-art Toronto map background
     this.drawMap();
@@ -4690,7 +5111,7 @@ class Chapter4 extends Scene {
         break;
     }
   }
-  cleanup() { stopBgm(); hideSubtitle(); }
+  cleanup() { stopBgm(); hideSubtitle(); disableTouchControls(); }
 }
 SCENES.Chapter4 = Chapter4;
 
@@ -4733,6 +5154,8 @@ We love you.
       });
     }
     startBgm('ending');
+    // Mobile: enable touch for opening ThinkPad and clicking buttons
+    setTouchControls({});
   }
   update(dt) {
     this.timer += dt;
@@ -4846,6 +5269,8 @@ We love you.
       }
     }
   }
+  // Touch handler (mobile) - forward to mouse
+  onTouchStart(x, y, id) { this.onMouseDown(x, y); }
   onMouseMove(x, y) {
     if (!this.showButtons) return;
     const by = CH - 80;
@@ -5144,7 +5569,7 @@ We love you.
       align: 'center', baseline: 'middle',
     });
   }
-  cleanup() { stopBgm(); hidePrompt(); }
+  cleanup() { stopBgm(); hidePrompt(); disableTouchControls(); }
 }
 SCENES.Ending = Ending;
 
