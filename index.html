@@ -552,13 +552,9 @@ function touchOnJoystick(touchX, touchY) {
 function handleTouchStart(e) {
   if (!touchControls.enabled) return;
   e.preventDefault();
-  const canvasRect = canvas.getBoundingClientRect();
-  const scaleX = CW / canvasRect.width;
-  const scaleY = CH / canvasRect.height;
 
   for (const touch of e.changedTouches) {
-    const tx = (touch.clientX - canvasRect.left) * scaleX;
-    const ty = (touch.clientY - canvasRect.top) * scaleY;
+    const { x: tx, y: ty } = clientToCanvasCoords(touch.clientX, touch.clientY);
 
     // Check joystick
     if (touchControls.joystick.active && touchOnJoystick(tx, ty)) {
@@ -588,7 +584,6 @@ function handleTouchStart(e) {
     if (touchControls.brakeBtn.visible && touchOnButton(tx, ty, touchControls.brakeBtn)) {
       touchControls.brakeBtn.pressed = true;
       touchControls.brakeBtn.touchId = touch.identifier;
-      // Brake = release gas (decelerate)
       keys['arrowright'] = false;
       keys['d'] = false;
       continue;
@@ -603,13 +598,9 @@ function handleTouchStart(e) {
 function handleTouchMove(e) {
   if (!touchControls.enabled) return;
   e.preventDefault();
-  const canvasRect = canvas.getBoundingClientRect();
-  const scaleX = CW / canvasRect.width;
-  const scaleY = CH / canvasRect.height;
 
   for (const touch of e.changedTouches) {
-    const tx = (touch.clientX - canvasRect.left) * scaleX;
-    const ty = (touch.clientY - canvasRect.top) * scaleY;
+    const { x: tx, y: ty } = clientToCanvasCoords(touch.clientX, touch.clientY);
 
     // Update joystick
     if (touch.identifier === touchControls.joystick.touchId) {
@@ -1625,13 +1616,41 @@ window.addEventListener('keyup', (e) => {
   if (game.scene && game.scene.onKeyUp) game.scene.onKeyUp(e);
 });
 
+// Get canvas coordinates accounting for object-fit: contain
+// This calculates the actual displayed area (excluding letterbox/pillarbox bars)
 function getCanvasCoords(e) {
   const rect = canvas.getBoundingClientRect();
-  const scaleX = CW / rect.width;
-  const scaleY = CH / rect.height;
+  // Canvas internal size
+  const cw = CW, ch = CH;
+  // Displayed size (rect)
+  const rw = rect.width, rh = rect.height;
+  // object-fit: contain - calculate actual content area
+  const scale = Math.min(rw / cw, rh / ch);
+  const displayedW = cw * scale;
+  const displayedH = ch * scale;
+  // Offset (letterbox bars)
+  const offsetX = rect.left + (rw - displayedW) / 2;
+  const offsetY = rect.top + (rh - displayedH) / 2;
+  // Convert client coords to canvas coords
   return {
-    x: (e.clientX - rect.left) * scaleX,
-    y: (e.clientY - rect.top) * scaleY,
+    x: (e.clientX - offsetX) / scale,
+    y: (e.clientY - offsetY) / scale,
+  };
+}
+
+// Same conversion for touch events (takes raw clientX/clientY)
+function clientToCanvasCoords(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const cw = CW, ch = CH;
+  const rw = rect.width, rh = rect.height;
+  const scale = Math.min(rw / cw, rh / ch);
+  const displayedW = cw * scale;
+  const displayedH = ch * scale;
+  const offsetX = rect.left + (rw - displayedW) / 2;
+  const offsetY = rect.top + (rh - displayedH) / 2;
+  return {
+    x: (clientX - offsetX) / scale,
+    y: (clientY - offsetY) / scale,
   };
 }
 
@@ -1745,19 +1764,50 @@ function initAudio() {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     game.audioCtx = audioCtx;
 
-    // Fix for iOS: route audio to speaker instead of earpiece
+    // Fix for iOS (Safari + Chrome): route audio to speaker instead of earpiece
     // Create a silent audio element that forces speaker output
     if (isMobile || hasTouch) {
       const silentAudio = document.createElement('audio');
       silentAudio.setAttribute('playsinline', '');
       silentAudio.setAttribute('loop', '');
-      // Tiny silent WAV (1 sample)
       silentAudio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
       silentAudio.volume = 0.01;
-      silentAudio.play().catch(() => {});
+      silentAudio.play().then(() => {
+        console.log('Silent audio playing - speaker routing forced');
+      }).catch(() => {});
       game.silentAudio = silentAudio;
     }
   } catch (e) { console.warn('Audio not available'); }
+}
+
+// Play an audio buffer with options
+function playAudioBuffer(name, options = {}) {
+  if (!audioCtx) return null;
+
+  // On mobile, ensure audio context is running (it can get suspended)
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+
+  if (!game.audioBuffers[name]) return null;
+  const buf = game.audioBuffers[name];
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.loop = options.loop || false;
+
+  const g = audioCtx.createGain();
+  g.gain.value = options.volume !== undefined ? options.volume : 0.5;
+
+  // On mobile, set the gain slightly higher to ensure audibility through speaker
+  if (isMobile || hasTouch) {
+    g.gain.value = Math.min(1.0, g.gain.value * 1.5);
+  }
+
+  src.connect(g);
+  g.connect(audioCtx.destination);
+
+  src.start();
+  return { src, g };
 }
 
 function playSfx(type) {
@@ -2603,7 +2653,7 @@ class MainMenu extends Scene {
     });
 
     // Version number (bottom-right, below device indicator)
-    drawText('v15', CW - 80, CH - 38, {
+    drawText('v16', CW - 80, CH - 38, {
       color: '#5a4830', font: '10px "Courier New", monospace', align: 'center',
     });
   }
